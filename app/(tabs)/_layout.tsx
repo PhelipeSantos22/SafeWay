@@ -31,6 +31,13 @@ export default function TabLayout() {
           tabBarIcon: ({ color }) => <Map size={28} color={color} />,
         }}
       />
+      {/* <Tabs.Screen
+        name="heatMap"
+        options={{
+          title: 'Mapa de Calor',
+          tabBarIcon: ({ color }) => <Map size={28} color={color} />,
+        }}
+      /> */}
       <Tabs.Screen
         name="settings"
         options={{
