@@ -4,7 +4,7 @@ import React from 'react';
 import { HapticTab } from '@/components/haptic-tab';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { BellRing, Map, Settings2 } from 'lucide-react-native';
+import { Map, Settings2 } from 'lucide-react-native';
 
 export default function TabLayout() {
   const colorScheme = useColorScheme();
@@ -17,13 +17,13 @@ export default function TabLayout() {
         headerShown: false,
         tabBarButton: HapticTab,
       }}>
-      <Tabs.Screen
+      {/* <Tabs.Screen
         name="notifications"
         options={{
           title: 'Notificações',
           tabBarIcon: ({ color }) => <BellRing size={28} color={color} />,
         }}
-      />
+      /> */}
       <Tabs.Screen
         name="map"
         options={{

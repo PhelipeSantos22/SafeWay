@@ -19,11 +19,11 @@ import rawGridData from "../../assets/data/grid_ocorrencias15km.json";
 
 const gridData = rawGridData as FeatureCollection;
 
-// 🔔 handler global para notificações
+// 🔔 handler global de notificação
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowBanner: true,  // mostra a notificação no topo
-    shouldShowList: true,    // mostra no histórico
+    shouldShowBanner: true,
+    shouldShowList: true,
     shouldPlaySound: true,
     shouldSetBadge: false,
   }),
@@ -40,13 +40,13 @@ export default function MapScreen() {
   const [showDialog, setShowDialog] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [selectedLevel, setSelectedLevel] = useState<string | null>(null);
-  const [notificationLevel, setNotificationLevel] = useState<string>("medium");
+  const [notificationLevel, setNotificationLevel] = useState<string>("moderate");
   const servicesEnabled = useLocationServices();
   const navigation = useNavigation<any>();
 
-  // evita spam de notificações na mesma área
   const lastNotifiedLevel = useRef<string | null>(null);
 
+  // define cor por número de ocorrências
   const getColor = (oc: number) => {
     if (oc > 1500) return "rgba(75, 0, 0, 0.5)";
     else if (oc >= 1000) return "rgba(128, 0, 0, 0.5)";
@@ -67,15 +67,21 @@ export default function MapScreen() {
     }
   };
 
+  // ✅ respeita o "none" e ajusta thresholds coerentes
   const shouldNotify = (userLevel: string, areaLevel: string) => {
+    if (userLevel === "none") return false;
+
     const hierarchy = ["muito baixo", "baixo", "moderado", "alto", "muito alto"];
     const thresholds: Record<string, number> = {
-      low: hierarchy.indexOf("alto"),
-      medium: hierarchy.indexOf("moderado"),
-      high: hierarchy.indexOf("muito baixo"),
+      "very-low": 0,        // notifica qualquer risco
+      low: 2,               // de moderado pra cima
+      moderate: 3,          // de alto pra cima
+      high: 4,              // só muito alto
+      "very-high": 5,       // nunca (exagero de segurança)
     };
+
     const idxArea = hierarchy.indexOf(areaLevel);
-    const idxMin = thresholds[userLevel];
+    const idxMin = thresholds[userLevel] ?? Infinity;
     return idxArea >= idxMin;
   };
 
@@ -130,11 +136,16 @@ export default function MapScreen() {
         setShowDialog(true);
         return;
       }
+
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") {
-        Alert.alert("Permissão negada", "Ative a permissão para acessar a localização.");
+        Alert.alert(
+          "Permissão negada",
+          "Ative a permissão de localização para usar o mapa corretamente."
+        );
         return;
       }
+
       const loc = await Location.getCurrentPositionAsync({});
       setLocation(loc.coords);
       setRegion({
@@ -232,22 +243,14 @@ export default function MapScreen() {
         <Settings2 size={28} color="#d3d3d3ff" />
       </TouchableOpacity>
 
-      <Modal
-        transparent={true}
-        visible={showDialog}
-        animationType="fade"
-        onRequestClose={() => setShowDialog(false)}
-      >
+      <Modal transparent={true} visible={showDialog} animationType="fade" onRequestClose={() => setShowDialog(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContainer}>
             <Text style={styles.modalTitle}>Localização desativada</Text>
             <Text style={styles.modalText}>
               Ative os serviços de localização para usar o mapa corretamente.
             </Text>
-            <TouchableOpacity
-              style={styles.modalButton}
-              onPress={() => setShowDialog(false)}
-            >
+            <TouchableOpacity style={styles.modalButton} onPress={() => setShowDialog(false)}>
               <Text style={styles.modalButtonText}>OK</Text>
             </TouchableOpacity>
           </View>
