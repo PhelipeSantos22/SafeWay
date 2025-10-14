@@ -1,9 +1,11 @@
 import useLocationServices from "@/utils/useLocationService";
-import { useNavigation } from '@react-navigation/native';
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useNavigation } from "@react-navigation/native";
 import * as Location from "expo-location";
-import type { FeatureCollection } from "geojson";
+import * as Notifications from "expo-notifications";
+import type { FeatureCollection, Polygon as GeoPolygon } from "geojson";
 import { LocateFixed, Settings2 } from "lucide-react-native";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Alert,
   Modal,
@@ -17,6 +19,16 @@ import rawGridData from "../../assets/data/grid_ocorrencias15km.json";
 
 const gridData = rawGridData as FeatureCollection;
 
+// 🔔 handler global para notificações
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowBanner: true,  // mostra a notificação no topo
+    shouldShowList: true,    // mostra no histórico
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
+
 export default function MapScreen() {
   const [region, setRegion] = useState({
     latitude: -23.55052,
@@ -24,56 +36,16 @@ export default function MapScreen() {
     latitudeDelta: 0.1,
     longitudeDelta: 0.1,
   });
-
   const [location, setLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [showDialog, setShowDialog] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [selectedLevel, setSelectedLevel] = useState<string | null>(null);
+  const [notificationLevel, setNotificationLevel] = useState<string>("medium");
   const servicesEnabled = useLocationServices();
   const navigation = useNavigation<any>();
 
-  const getLocation = async () => {
-    try {
-      const servicesEnabled = await Location.hasServicesEnabledAsync();
-      if (!servicesEnabled) {
-        setShowDialog(true);
-        return;
-      }
-
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted") {
-        Alert.alert("Permissão negada", "Ative a permissão para acessar a localização.");
-        return;
-      }
-
-      const loc = await Location.getCurrentPositionAsync({});
-      setLocation(loc.coords);
-      setRegion({
-        latitude: loc.coords.latitude,
-        longitude: loc.coords.longitude,
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01,
-      });
-    } catch (error) {
-      console.log("Erro ao obter localização:", error);
-    }
-  };
-
-  useEffect(() => {
-    getLocation();
-  }, []);
-
-  useEffect(() => {
-    if (servicesEnabled === false) {
-      setShowDialog(true);
-    } else if (servicesEnabled === true) {
-      setShowDialog(false);
-    }
-  }, [servicesEnabled]);
-
-  const centerOnUser = async () => {
-    await getLocation();
-  };
+  // evita spam de notificações na mesma área
+  const lastNotifiedLevel = useRef<string | null>(null);
 
   const getColor = (oc: number) => {
     if (oc > 1500) return "rgba(75, 0, 0, 0.5)";
@@ -95,6 +67,121 @@ export default function MapScreen() {
     }
   };
 
+  const shouldNotify = (userLevel: string, areaLevel: string) => {
+    const hierarchy = ["muito baixo", "baixo", "moderado", "alto", "muito alto"];
+    const thresholds: Record<string, number> = {
+      low: hierarchy.indexOf("alto"),
+      medium: hierarchy.indexOf("moderado"),
+      high: hierarchy.indexOf("muito baixo"),
+    };
+    const idxArea = hierarchy.indexOf(areaLevel);
+    const idxMin = thresholds[userLevel];
+    return idxArea >= idxMin;
+  };
+
+  const isPointInPolygon = (
+    point: { latitude: number; longitude: number },
+    vs: { latitude: number; longitude: number }[]
+  ) => {
+    let inside = false;
+    for (let i = 0, j = vs.length - 1; i < vs.length; j = i++) {
+      const xi = vs[i].longitude, yi = vs[i].latitude;
+      const xj = vs[j].longitude, yj = vs[j].latitude;
+      const intersect =
+        yi > point.latitude !== yj > point.latitude &&
+        point.longitude < ((xj - xi) * (point.latitude - yi)) / (yj - yi) + xi;
+      if (intersect) inside = !inside;
+    }
+    return inside;
+  };
+
+  const checkRiskArea = async (coords: { latitude: number; longitude: number }) => {
+    for (const feature of gridData.features) {
+      const ocorrencias = feature.properties?.ocorrencias || 0;
+      const color = getColor(ocorrencias);
+      const level = getLevel(color);
+
+      if (!shouldNotify(notificationLevel, level)) continue;
+
+      const polygonCoords = (feature.geometry as GeoPolygon).coordinates[0].map(
+        (c: number[]) => ({ latitude: c[1], longitude: c[0] })
+      );
+
+      if (isPointInPolygon(coords, polygonCoords)) {
+        if (lastNotifiedLevel.current !== level) {
+          await Notifications.scheduleNotificationAsync({
+            content: {
+              title: "Área de risco detectada",
+              body: `Você entrou em uma área de risco (${level}).`,
+            },
+            trigger: null,
+          });
+          lastNotifiedLevel.current = level;
+        }
+        break;
+      }
+    }
+  };
+
+  const getLocation = async () => {
+    try {
+      const enabled = await Location.hasServicesEnabledAsync();
+      if (!enabled) {
+        setShowDialog(true);
+        return;
+      }
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Permissão negada", "Ative a permissão para acessar a localização.");
+        return;
+      }
+      const loc = await Location.getCurrentPositionAsync({});
+      setLocation(loc.coords);
+      setRegion({
+        latitude: loc.coords.latitude,
+        longitude: loc.coords.longitude,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      });
+    } catch (error) {
+      console.log("Erro ao obter localização:", error);
+    }
+  };
+
+  useEffect(() => {
+    getLocation();
+    (async () => {
+      const saved = await AsyncStorage.getItem("notificationLevel");
+      if (saved) setNotificationLevel(saved);
+      const { status } = await Notifications.requestPermissionsAsync();
+      if (status !== "granted") console.log("Permissão de notificação negada");
+    })();
+  }, []);
+
+  useEffect(() => {
+    let sub: Location.LocationSubscription | null = null;
+    (async () => {
+      sub = await Location.watchPositionAsync(
+        { accuracy: Location.LocationAccuracy.High, timeInterval: 5000, distanceInterval: 5 },
+        (loc) => {
+          setLocation(loc.coords);
+          checkRiskArea(loc.coords);
+        }
+      );
+    })();
+    return () => {
+      if (sub) sub.remove();
+    };
+  }, [notificationLevel]);
+
+  useEffect(() => {
+    setShowDialog(servicesEnabled === false);
+  }, [servicesEnabled]);
+
+  const centerOnUser = async () => {
+    await getLocation();
+  };
+
   return (
     <View style={styles.container}>
       <MapView
@@ -108,18 +195,17 @@ export default function MapScreen() {
         {gridData.features.map((feature, index) => {
           const ocorrencias = feature.properties?.ocorrencias || 0;
           const color = getColor(ocorrencias);
-          const coords = (feature.geometry as any).coordinates[0].map((c: number[]) => ({
+          const coords = (feature.geometry as GeoPolygon).coordinates[0].map((c: number[]) => ({
             latitude: c[1],
             longitude: c[0],
           }));
-
           return (
             <Polygon
               key={index}
               coordinates={coords}
               tappable={true}
               strokeColor={selectedIndex === index ? "#1f1f1f" : "rgba(0,0,0,0.001)"}
-              strokeWidth={selectedIndex === index ? 0.5 : 0.5}
+              strokeWidth={0.5}
               fillColor={color}
               onPress={() => {
                 setSelectedIndex(index);
@@ -146,7 +232,6 @@ export default function MapScreen() {
         <Settings2 size={28} color="#d3d3d3ff" />
       </TouchableOpacity>
 
-      {/* Dialog */}
       <Modal
         transparent={true}
         visible={showDialog}
@@ -189,10 +274,10 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
   },
   settingsButton: {
-    position: 'absolute',
+    position: "absolute",
     top: 50,
     right: 20,
-    backgroundColor: '#1f1f1f',
+    backgroundColor: "#1f1f1f",
     borderRadius: 30,
     padding: 10,
     elevation: 5,
