@@ -14,7 +14,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import MapView, { Polygon } from "react-native-maps";
+import MapView, { Polygon, PROVIDER_GOOGLE } from "react-native-maps";
 import rawGridData from "../../assets/data/grid_ocorrencias15km.json";
 
 const gridData = rawGridData as FeatureCollection;
@@ -196,6 +196,7 @@ export default function MapScreen() {
   return (
     <View style={styles.container}>
       <MapView
+        provider={PROVIDER_GOOGLE}
         style={styles.map}
         region={region}
         showsUserLocation={true}
