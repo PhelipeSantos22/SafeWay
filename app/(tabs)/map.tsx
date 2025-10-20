@@ -1,11 +1,11 @@
 import useLocationServices from "@/utils/useLocationService";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useNavigation } from "@react-navigation/native";
+import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import * as Location from "expo-location";
 import * as Notifications from "expo-notifications";
 import type { FeatureCollection, Polygon as GeoPolygon } from "geojson";
 import { LocateFixed, Settings2 } from "lucide-react-native";
-import { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
   Modal,
@@ -29,6 +29,26 @@ Notifications.setNotificationHandler({
   }),
 });
 
+// Hierarquia de risco para facilitar a comparação (quanto maior, maior o risco)
+const RISK_HIERARCHY: Record<string, number> = {
+  "pouco ou nenhum": -1,
+  "muito baixo": 0, // very-low
+  "baixo": 1, // low
+  "moderado": 2, // moderate
+  "alto": 3, // high
+  "muito alto": 4, // very-high
+};
+
+// Mapeamento das configurações do usuário (em inglês) para o índice mínimo de risco (em português)
+const USER_THRESHOLDS: Record<string, number> = {
+  "none": 5, // Não notifica (índice maior que o máximo 4)
+  "very-low": RISK_HIERARCHY["muito baixo"],
+  "low": RISK_HIERARCHY["baixo"],
+  "moderate": RISK_HIERARCHY["moderado"],
+  "high": RISK_HIERARCHY["alto"],
+  "very-high": RISK_HIERARCHY["muito alto"],
+};
+
 export default function MapScreen() {
   const [region, setRegion] = useState({
     latitude: -23.55052,
@@ -40,22 +60,27 @@ export default function MapScreen() {
   const [showDialog, setShowDialog] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [selectedLevel, setSelectedLevel] = useState<string | null>(null);
+  // Padrão 'moderate' como fallback
   const [notificationLevel, setNotificationLevel] = useState<string>("moderate");
   const servicesEnabled = useLocationServices();
   const navigation = useNavigation<any>();
 
+  // Armazena o nível da última área de risco notificada.
   const lastNotifiedLevel = useRef<string | null>(null);
+  // Armazena a inscrição do monitoramento de localização.
+  const locationSubscription = useRef<Location.LocationSubscription | null>(null);
 
   // define cor por número de ocorrências
   const getColor = (oc: number) => {
-    if (oc > 1500) return "rgba(75, 0, 0, 0.5)";
-    else if (oc >= 1000) return "rgba(128, 0, 0, 0.5)";
-    else if (oc >= 500) return "rgba(226, 88, 34, 0.5)";
-    else if (oc >= 250) return "rgba(255, 140, 0, 0.5)";
-    else if (oc >= 50) return "rgba(255, 215, 0, 0.5)";
+    if (oc > 1500) return "rgba(75, 0, 0, 0.5)"; // Muito Alto
+    else if (oc >= 1000) return "rgba(128, 0, 0, 0.5)"; // Alto
+    else if (oc >= 500) return "rgba(226, 88, 34, 0.5)"; // Moderado
+    else if (oc >= 250) return "rgba(255, 140, 0, 0.5)"; // Baixo
+    else if (oc >= 50) return "rgba(255, 215, 0, 0.5)"; // Muito Baixo
     else return "transparent";
   };
 
+  // define nível por cor
   const getLevel = (color: string) => {
     switch (color) {
       case "rgba(75, 0, 0, 0.5)": return "muito alto";
@@ -67,21 +92,14 @@ export default function MapScreen() {
     }
   };
 
-  // ✅ respeita o "none" e ajusta thresholds coerentes
+  // ✅ Lógica de notificação CORRIGIDA.
   const shouldNotify = (userLevel: string, areaLevel: string) => {
     if (userLevel === "none") return false;
 
-    const hierarchy = ["muito baixo", "baixo", "moderado", "alto", "muito alto"];
-    const thresholds: Record<string, number> = {
-      "very-low": 0,        // notifica qualquer risco
-      low: 2,               // de moderado pra cima
-      moderate: 3,          // de alto pra cima
-      high: 4,              // só muito alto
-      "very-high": 5,       // nunca (exagero de segurança)
-    };
+    const idxArea = RISK_HIERARCHY[areaLevel] ?? -1;
+    const idxMin = USER_THRESHOLDS[userLevel] ?? 5; // Fallback para não notificar
 
-    const idxArea = hierarchy.indexOf(areaLevel);
-    const idxMin = thresholds[userLevel] ?? Infinity;
+    // Notifica se o nível da área for igual ou superior ao nível mínimo configurado pelo usuário.
     return idxArea >= idxMin;
   };
 
@@ -102,34 +120,51 @@ export default function MapScreen() {
   };
 
   const checkRiskArea = async (coords: { latitude: number; longitude: number }) => {
-    for (const feature of gridData.features) {
+    let foundNotifiableArea = false;
+    let currentAreaLevel: string | null = null;
+
+    for (const [index, feature] of gridData.features.entries()) {
       const ocorrencias = feature.properties?.ocorrencias || 0;
       const color = getColor(ocorrencias);
       const level = getLevel(color);
 
-      if (!shouldNotify(notificationLevel, level)) continue;
-
+      // Garante que é um polígono e extrai as coordenadas
+      if (feature.geometry?.type !== 'Polygon') continue;
       const polygonCoords = (feature.geometry as GeoPolygon).coordinates[0].map(
         (c: number[]) => ({ latitude: c[1], longitude: c[0] })
       );
 
       if (isPointInPolygon(coords, polygonCoords)) {
-        if (lastNotifiedLevel.current !== level) {
-          await Notifications.scheduleNotificationAsync({
-            content: {
-              title: "Área de risco detectada",
-              body: `Você entrou em uma área de risco (${level}).`,
-            },
-            trigger: null,
-          });
-          lastNotifiedLevel.current = level;
+        currentAreaLevel = level;
+        
+        if (shouldNotify(notificationLevel, level)) {
+          foundNotifiableArea = true;
+
+          // Se o usuário entrou em uma área com nível de risco diferente do último notificado, notifica.
+          if (lastNotifiedLevel.current !== level) {
+            await Notifications.scheduleNotificationAsync({
+              content: {
+                title: "🚨 Área de risco detectada",
+                body: `Você entrou em uma área de risco (${level}).`,
+              },
+              trigger: null,
+            });
+            lastNotifiedLevel.current = level;
+          }
         }
-        break;
+        break; // Sai do loop assim que a célula atual é encontrada
       }
+    }
+    
+    // Se não encontrou nenhuma área que exija notificação, limpa o estado
+    // para que uma notificação possa ser enviada quando entrar em uma nova área de risco.
+    if (!foundNotifiableArea && lastNotifiedLevel.current !== null) {
+        lastNotifiedLevel.current = null;
     }
   };
 
   const getLocation = async () => {
+    // ... (restante da função getLocation inalterada)
     try {
       const enabled = await Location.hasServicesEnabledAsync();
       if (!enabled) {
@@ -159,20 +194,41 @@ export default function MapScreen() {
     }
   };
 
+  // Carrega permissões iniciais e localização
   useEffect(() => {
     getLocation();
     (async () => {
-      const saved = await AsyncStorage.getItem("notificationLevel");
-      if (saved) setNotificationLevel(saved);
       const { status } = await Notifications.requestPermissionsAsync();
       if (status !== "granted") console.log("Permissão de notificação negada");
     })();
   }, []);
 
+  // ✅ NOVO: Recarrega o nível de notificação do AsyncStorage toda vez que a tela é focada
+  useFocusEffect(
+    useCallback(() => {
+      const loadNotificationLevel = async () => {
+        const saved = await AsyncStorage.getItem("notificationLevel");
+        // Atualiza o estado para acionar o useEffect de monitoramento de localização
+        if (saved) {
+            setNotificationLevel(saved);
+        }
+      };
+
+      loadNotificationLevel();
+    }, [])
+  );
+  
+  // Efeito que monitora a localização. É re-executado quando notificationLevel muda.
   useEffect(() => {
-    let sub: Location.LocationSubscription | null = null;
+    // Limpa a assinatura anterior
+    if (locationSubscription.current) {
+        locationSubscription.current.remove();
+        locationSubscription.current = null;
+    }
+    
+    // Configura a nova assinatura (watchPositionAsync)
     (async () => {
-      sub = await Location.watchPositionAsync(
+      locationSubscription.current = await Location.watchPositionAsync(
         { accuracy: Location.LocationAccuracy.High, timeInterval: 5000, distanceInterval: 5 },
         (loc) => {
           setLocation(loc.coords);
@@ -180,10 +236,14 @@ export default function MapScreen() {
         }
       );
     })();
+    
+    // Função de cleanup para remover a assinatura ao desmontar ou re-executar o useEffect
     return () => {
-      if (sub) sub.remove();
+        if (locationSubscription.current) {
+            locationSubscription.current.remove();
+        }
     };
-  }, [notificationLevel]);
+  }, [notificationLevel]); // Depende do nível de notificação para que a lógica de risco seja atualizada imediatamente
 
   useEffect(() => {
     setShowDialog(servicesEnabled === false);
@@ -205,6 +265,8 @@ export default function MapScreen() {
         mapPadding={{ top: 100, right: 0, bottom: 0, left: 0 }}
       >
         {gridData.features.map((feature, index) => {
+          if (feature.geometry?.type !== 'Polygon') return null;
+          
           const ocorrencias = feature.properties?.ocorrencias || 0;
           const color = getColor(ocorrencias);
           const coords = (feature.geometry as GeoPolygon).coordinates[0].map((c: number[]) => ({
