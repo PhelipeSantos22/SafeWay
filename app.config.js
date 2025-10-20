@@ -6,7 +6,7 @@ export default {
     slug: "SafeWay",
     version: "1.0.0",
     orientation: "portrait",
-    icon: "./assets/images/icon.png",
+    icon: "./assets/images/iconSafeWay.png",
     scheme: "safeway",
     userInterfaceStyle: "automatic",
     newArchEnabled: true,
@@ -16,9 +16,10 @@ export default {
     android: {
       adaptiveIcon: {
         backgroundColor: "#E6F4FE",
-        foregroundImage: "./assets/images/android-icon-foreground.png",
-        backgroundImage: "./assets/images/android-icon-background.png",
-        monochromeImage: "./assets/images/android-icon-monochrome.png",
+        foregroundImage: "./assets/images/iconSafeWay.png",
+      },
+      notification: {
+        icon: "./assets/images/iconNotification.png",
       },
       edgeToEdgeEnabled: true,
       predictiveBackGestureEnabled: false,
@@ -33,20 +34,12 @@ export default {
       output: "static",
       favicon: "./assets/images/favicon.png",
     },
+    splash: {
+      image: "./assets/images/splashSafeWay.png",
+      resizeMode: "contain",
+    },
     plugins: [
       "expo-router",
-      [
-        "expo-splash-screen",
-        {
-          image: "./assets/images/splash-icon.png",
-          imageWidth: 200,
-          resizeMode: "contain",
-          backgroundColor: "#ffffff",
-          dark: {
-            backgroundColor: "#000000",
-          },
-        },
-      ],
       "expo-font",
       "expo-web-browser",
     ],
