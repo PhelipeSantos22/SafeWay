@@ -42,6 +42,12 @@ export default {
       "expo-router",
       "expo-font",
       "expo-web-browser",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/iconNotification.png", 
+        }
+      ]
     ],
     experiments: {
       typedRoutes: true,
